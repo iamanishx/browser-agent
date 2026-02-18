@@ -1,4 +1,4 @@
-# pos-agent
+# browser-agent
 
 To install dependencies:
 
