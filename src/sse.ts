@@ -1,98 +1,232 @@
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
-import { createWebAgent } from "./agent/agents";
+import {
+    getRunById,
+    getRunEventPayloads,
+    listRunEventsAfter,
+} from "./run/store";
 
-export async function createSSEStream(c: Context) {
-    return streamSSE(c, async (stream) => {
-        stream.onAbort(() => {
-            console.log("[SSE] Client disconnected");
+type StreamOptions = {
+    pollIntervalMs?: number;
+    heartbeatIntervalMs?: number;
+};
+
+type StreamEvent = {
+    id: number;
+    type: string;
+    data: unknown;
+    createdAt: string;
+};
+
+function getLastEventId(c: Context): number {
+    const headerValue = c.req.header("last-event-id");
+    const queryValue = c.req.query("lastEventId");
+    const raw = headerValue ?? queryValue ?? "0";
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function isTerminalStatus(status: string): boolean {
+    return (
+        status === "completed" || status === "failed" || status === "cancelled"
+    );
+}
+
+function toStreamEvent(row: {
+    id: number;
+    eventType: string;
+    eventData: string;
+    createdAt: string;
+}): StreamEvent {
+    return {
+        id: row.id,
+        type: row.eventType,
+        data: JSON.parse(row.eventData),
+        createdAt: row.createdAt,
+    };
+}
+
+async function writeEvents(
+    stream: {
+        writeSSE: (event: {
+            id?: string;
+            event?: string;
+            data: string;
+        }) => Promise<void>;
+    },
+    events: StreamEvent[],
+) {
+    for (const event of events) {
+        await stream.writeSSE({
+            id: String(event.id),
+            event: event.type,
+            data: JSON.stringify(event.data),
         });
+    }
+}
 
-        const agent = await createWebAgent();
+async function loadEventsAfter(
+    runId: string,
+    cursor: number,
+): Promise<StreamEvent[]> {
+    const rows = await listRunEventsAfter(runId, cursor);
+    return rows.map(toStreamEvent);
+}
 
-        const result = await agent.stream({
-            prompt: "go merchat.sabpe.com and use the mail: ujsquared@gmail.com and password: password123 and login and then go to the setting page and tell me whats the gstin number",
-        });
+export async function streamRunEvents(
+    c: Context,
+    runId: string,
+    options: StreamOptions = {},
+) {
+    const pollIntervalMs = options.pollIntervalMs ?? 1000;
+    const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15000;
+    const lastSeenEventId = getLastEventId(c);
 
-        let eventId = 0;
+    const run = await getRunById(runId);
 
-            for await (const part of result.fullStream) {
-                switch (part.type) {
-                  
-                    case "text-delta": {
-                        process.stdout.write(part.text);
-                        await stream.writeSSE({
-                            event: "text-delta",
-                            data: JSON.stringify({ text: part.text }),
-                            id: String(eventId++),
-                        });
-                        break;
-                    }
+    if (!run) {
+        return c.json(
+            {
+                error: "Run not found",
+                runId,
+            },
+            404,
+        );
+    }
 
-                    case "tool-call": {
-                        const log = {
-                            toolName: part.toolName,
-                            input: part.input,
-                        };
-                        console.log(
-                            `[Tool call]: ${part.toolName}`,
-                            JSON.stringify(part.input, null, 2),
-                        );
-                        await stream.writeSSE({
-                            event: "tool-call",
-                            data: JSON.stringify(log),
-                            id: String(eventId++),
-                        });
-                        break;
-                    }
+    return streamSSE(
+        c,
+        async (stream) => {
+            let cursor = lastSeenEventId;
+            let closed = false;
+            let lastHeartbeatAt = Date.now();
 
-                    case "tool-result": {
-                        const log = {
-                            toolName: part.toolName,
-                            output: part.output,
-                        };
-                        console.log(
-                            `[Tool result]: ${part.toolName}`,
-                            JSON.stringify(part.output, null, 2),
-                        );
-                        await stream.writeSSE({
-                            event: "tool-result",
-                            data: JSON.stringify(log),
-                            id: String(eventId++),
-                        });
-                        break;
-                    }
+            stream.onAbort(() => {
+                closed = true;
+                console.log(`[SSE] Client disconnected from run ${runId}`);
+            });
 
-                    case "error": {
-                        console.error(`[Error]:`, part.error);
-                        await stream.writeSSE({
-                            event: "error",
-                            data: JSON.stringify({
-                                error:
-                                    part.error instanceof Error
-                                        ? part.error.message
-                                        : String(part.error),
-                            }),
-                            id: String(eventId++),
-                        });
-                        break;
-                    }
-                }
+            await stream.writeSSE({
+                event: "run",
+                id: String(cursor),
+                data: JSON.stringify({
+                    runId: run.id,
+                    sessionId: run.sessionId,
+                    status: run.status,
+                    prompt: run.prompt,
+                    error: run.error,
+                    startedAt: run.startedAt,
+                    completedAt: run.completedAt,
+                    createdAt: run.createdAt,
+                }),
+            });
+
+            const replayEvents = (await getRunEventPayloads(runId)).filter(
+                (event) => event.id > cursor,
+            );
+
+            if (replayEvents.length > 0) {
+                await writeEvents(
+                    stream,
+                    replayEvents.map((event) => ({
+                        id: event.id,
+                        type: event.type,
+                        data: event.data,
+                        createdAt: event.createdAt,
+                    })),
+                );
+                cursor = replayEvents[replayEvents.length - 1]!.id;
+                lastHeartbeatAt = Date.now();
             }
 
-            console.log();
-            await stream.writeSSE({
-                event: "done",
-                data: JSON.stringify({ message: "Stream complete" }),
-                id: String(eventId++),
-            });
+            while (!closed) {
+                const events = await loadEventsAfter(runId, cursor);
+
+                if (events.length > 0) {
+                    await writeEvents(stream, events);
+                    cursor = events[events.length - 1]!.id;
+                    lastHeartbeatAt = Date.now();
+                }
+
+                const currentRun = await getRunById(runId);
+
+                if (!currentRun) {
+                    await stream.writeSSE({
+                        event: "error",
+                        id: String(cursor),
+                        data: JSON.stringify({
+                            message: "Run disappeared while streaming",
+                            runId,
+                        }),
+                    });
+                    break;
+                }
+
+                if (isTerminalStatus(currentRun.status)) {
+                    const trailingEvents = await loadEventsAfter(runId, cursor);
+
+                    if (trailingEvents.length > 0) {
+                        await writeEvents(stream, trailingEvents);
+                        cursor = trailingEvents[trailingEvents.length - 1]!.id;
+                    }
+
+                    await stream.writeSSE({
+                        event: "run-status",
+                        id: String(cursor),
+                        data: JSON.stringify({
+                            runId: currentRun.id,
+                            status: currentRun.status,
+                            error: currentRun.error,
+                            completedAt: currentRun.completedAt,
+                        }),
+                    });
+
+                    break;
+                }
+
+                const now = Date.now();
+
+                if (now - lastHeartbeatAt >= heartbeatIntervalMs) {
+                    await stream.writeSSE({
+                        event: "heartbeat",
+                        id: String(cursor),
+                        data: JSON.stringify({
+                            runId,
+                            ts: new Date(now).toISOString(),
+                        }),
+                    });
+                    lastHeartbeatAt = now;
+                }
+
+                await stream.sleep(pollIntervalMs);
+            }
         },
         async (err, stream) => {
-            console.error("[SSE] Stream error:", err);
+            console.error(`[SSE] Stream error for run ${runId}:`, err);
+
             await stream.writeSSE({
                 event: "error",
-                data: JSON.stringify({ error: err.message }),
+                data: JSON.stringify({
+                    runId,
+                    message: err instanceof Error ? err.message : String(err),
+                }),
             });
         },
     );
+}
+
+export async function handleRunStream(c: Context) {
+    const runId = c.req.param("runId");
+
+    if (!runId) {
+        return c.json(
+            {
+                error: "Missing runId route parameter",
+            },
+            400,
+        );
+    }
+
+    return streamRunEvents(c, runId);
 }

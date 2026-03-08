@@ -1,20 +1,30 @@
 {
-  "name": "pos-agent",
-  "module": "index.ts",
-  "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@ai-sdk/amazon-bedrock": "^4.0.77",
-    "@ai-sdk/mcp": "^1.0.25",
-    "@aws-sdk/credential-providers": "^3.1003.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "ai": "^6.0.90",
-    "hono": "^4.11.9"
-  }
+    "name": "pos-agent",
+    "module": "index.ts",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "bun run index.ts",
+        "db:generate": "drizzle-kit generate",
+        "db:migrate": "drizzle-kit migrate",
+        "db:push": "drizzle-kit push",
+        "db:studio": "drizzle-kit studio",
+        "db:check": "drizzle-kit check"
+    },
+    "devDependencies": {
+        "@types/bun": "latest",
+        "drizzle-kit": "^0.31.9"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@ai-sdk/amazon-bedrock": "^4.0.77",
+        "@ai-sdk/mcp": "^1.0.25",
+        "@aws-sdk/credential-providers": "^3.1003.0",
+        "@modelcontextprotocol/sdk": "^1.27.1",
+        "ai": "^6.0.90",
+        "drizzle-orm": "^0.45.1",
+        "hono": "^4.11.9"
+    }
 }

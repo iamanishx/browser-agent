@@ -1,8 +1,13 @@
 import { Hono } from "hono";
-import { createSSEStream } from "./src/sse";
+import { runMigrations } from "./src/db/migrate";
+import { handleRun } from "./src/run/run-route";
+import { handleRunStream } from "./src/sse";
+
+runMigrations();
 
 const app = new Hono();
 
-app.get("/stream", (c) => createSSEStream(c));
+app.post("/run", handleRun);
+app.get("/stream/:runId", handleRunStream);
 
 export default app;
