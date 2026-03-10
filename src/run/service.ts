@@ -1,30 +1,25 @@
 import { randomUUID } from "crypto";
 import { buildAgentPrompt, createWebAgent } from "../agent/agents";
 import {
-    createRunRecord,
     createSessionIfMissing,
-    getRunById,
     getSlidingWindowMessages,
-    insertMessage,
-    insertRunEvent,
-    markRunCompleted,
-    markRunFailed,
-    markRunStarted,
+    listPartsByMessageId,
+    upsertMessage,
+    upsertPart,
     type MessageRecord,
-    type RunEventRecord,
-    type RunStatus,
 } from "../db/db";
+import type { PartData } from "../db/schema";
+import { sessionBus } from "../events/event-bus";
 
-export type CreateRunInput = {
-    prompt: string;
+export type SendMessageInput = {
+    content: string;
     sessionId?: string;
     windowSize?: number;
 };
 
-export type CreateRunResult = {
-    runId: string;
+export type SendMessageResult = {
     sessionId: string;
-    status: RunStatus;
+    userMessageId: string;
 };
 
 const DEFAULT_WINDOW_SIZE = 15;
@@ -33,19 +28,12 @@ function normalizeWindowSize(windowSize?: number): number {
     if (!windowSize || Number.isNaN(windowSize) || windowSize < 1) {
         return DEFAULT_WINDOW_SIZE;
     }
-
     return Math.floor(windowSize);
 }
 
 function serializeError(error: unknown): string {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === "string") {
-        return error;
-    }
-
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
     try {
         return JSON.stringify(error);
     } catch {
@@ -53,123 +41,158 @@ function serializeError(error: unknown): string {
     }
 }
 
-function toPromptHistory(messages: MessageRecord[]) {
-    return messages
-        .filter(
-            (
-                message,
-            ): message is MessageRecord & {
-                role: "system" | "user" | "assistant";
-            } =>
-                message.role === "system" ||
-                message.role === "user" ||
-                message.role === "assistant",
-        )
-        .map((message) => ({
-            role: message.role,
-            content: message.content,
-            createdAt: message.createdAt,
-        }));
+async function toPromptHistory(messages: MessageRecord[]) {
+    const history: Array<{ role: "user" | "assistant"; content: string; createdAt: string }> = [];
+
+    for (const m of messages) {
+        if (m.data.role === "user") {
+            history.push({
+                role: "user",
+                content: m.data.content,
+                createdAt: String(m.createdAt),
+            });
+        } else if (m.data.role === "assistant") {
+            const msgParts = await listPartsByMessageId(m.id);
+            const textParts = msgParts
+                .filter((p) => p.data.type === "text")
+                .map((p) => (p.data as { type: "text"; text: string }).text);
+            const text = textParts.join("");
+
+            if (text.length > 0) {
+                history.push({
+                    role: "assistant",
+                    content: text,
+                    createdAt: String(m.createdAt),
+                });
+            }
+        }
+    }
+
+    return history;
 }
 
-async function persistEvent(
-    runId: string,
-    eventType: RunEventRecord["eventType"],
-    data: unknown,
-): Promise<RunEventRecord> {
-    return insertRunEvent({
-        runId,
-        eventType,
-        data,
-    });
-}
-
-type ExecuteRunInput = {
-    runId: string;
-    sessionId: string;
-    originalPrompt: string;
-    promptWithHistory: string;
-};
-
-export async function createRun(
-    input: CreateRunInput,
-): Promise<CreateRunResult> {
+export async function sendMessage(
+    input: SendMessageInput,
+): Promise<SendMessageResult> {
     const sessionId = input.sessionId ?? randomUUID();
-    const runId = randomUUID();
     const windowSize = normalizeWindowSize(input.windowSize);
 
     await createSessionIfMissing({ id: sessionId });
 
+    const activeRun = sessionBus.getActiveRun(sessionId);
+    if (activeRun) {
+        sessionBus.cancelRun(sessionId);
+        await Bun.sleep(100);
+    }
+
+    const userMessageId = randomUUID();
+    const ts = Date.now();
+
+    await upsertMessage({
+        id: userMessageId,
+        sessionId,
+        data: {
+            role: "user",
+            content: input.content,
+            time: { created: ts },
+        },
+    });
+
+    sessionBus.emit(sessionId, {
+        sessionId,
+        messageId: userMessageId,
+        type: "message-created",
+        data: { role: "user", content: input.content },
+        timestamp: ts,
+    });
+
     const priorMessages = await getSlidingWindowMessages(sessionId, windowSize);
-
-    await insertMessage({
-        id: randomUUID(),
-        sessionId,
-        role: "user",
-        content: input.prompt,
-    });
-
-    await createRunRecord({
-        id: runId,
-        sessionId,
-        prompt: input.prompt,
-        status: "queued",
-    });
-
-    await persistEvent(runId, "run-created", {
-        runId,
-        sessionId,
-        prompt: input.prompt,
-        windowSize,
-    });
-
     const promptWithHistory = buildAgentPrompt({
-        userPrompt: input.prompt,
-        history: toPromptHistory(priorMessages),
+        userPrompt: input.content,
+        history: await toPromptHistory(priorMessages),
         maxHistoryMessages: windowSize,
     });
 
+    const runId = randomUUID();
+    const abortController = sessionBus.startRun(sessionId, runId);
+
     queueMicrotask(() => {
-        void executeRun({
+        void executeAgent({
             runId,
             sessionId,
-            originalPrompt: input.prompt,
+            originalPrompt: input.content,
             promptWithHistory,
+            abortSignal: abortController.signal,
         });
     });
 
-    return {
-        runId,
-        sessionId,
-        status: "queued",
-    };
+    return { sessionId, userMessageId };
 }
 
-export async function executeRun(input: ExecuteRunInput): Promise<void> {
+type ExecuteAgentInput = {
+    runId: string;
+    sessionId: string;
+    originalPrompt: string;
+    promptWithHistory: string;
+    abortSignal: AbortSignal;
+};
+
+async function executeAgent(input: ExecuteAgentInput): Promise<void> {
+    const { runId, sessionId, abortSignal } = input;
     let assistantText = "";
+    const startTime = Date.now();
+
+    const assistantMessageId = randomUUID();
+    await upsertMessage({
+        id: assistantMessageId,
+        sessionId,
+        data: {
+            role: "assistant",
+            time: { created: startTime },
+            model: "claude-sonnet-4-5",
+        },
+    });
+
+    sessionBus.emit(sessionId, {
+        sessionId,
+        messageId: assistantMessageId,
+        type: "message-created",
+        data: { role: "assistant", messageId: assistantMessageId },
+        timestamp: startTime,
+    });
+
+    let textPartId: string | null = null;
+    let textStartTime = 0;
 
     try {
-        await markRunStarted(input.runId);
-
-        await persistEvent(input.runId, "run-started", {
-            runId: input.runId,
-            sessionId: input.sessionId,
-            prompt: input.originalPrompt,
-        });
-
         const agent = await createWebAgent();
         const result = await agent.stream({
             prompt: input.promptWithHistory,
         });
 
         for await (const part of result.fullStream) {
+            if (abortSignal.aborted) {
+                console.log(`[Agent] Run ${runId} aborted`);
+                break;
+            }
+
             switch (part.type) {
                 case "text-delta": {
                     assistantText += part.text;
                     process.stdout.write(part.text);
 
-                    await persistEvent(input.runId, "text-delta", {
-                        text: part.text,
+                    if (!textPartId) {
+                        textPartId = randomUUID();
+                        textStartTime = Date.now();
+                    }
+
+                    sessionBus.emit(sessionId, {
+                        sessionId,
+                        messageId: assistantMessageId,
+                        partId: textPartId,
+                        type: "part-delta",
+                        data: { text: part.text, partId: textPartId },
+                        timestamp: Date.now(),
                     });
                     break;
                 }
@@ -180,9 +203,47 @@ export async function executeRun(input: ExecuteRunInput): Promise<void> {
                         JSON.stringify(part.input, null, 2),
                     );
 
-                    await persistEvent(input.runId, "tool-call", {
-                        toolName: part.toolName,
-                        input: part.input,
+                    if (textPartId && assistantText.trim().length > 0) {
+                        await upsertPart({
+                            id: textPartId,
+                            messageId: assistantMessageId,
+                            sessionId,
+                            data: {
+                                type: "text",
+                                text: assistantText,
+                                time: { start: textStartTime, end: Date.now() },
+                            },
+                        });
+                        textPartId = null;
+                        assistantText = "";
+                    }
+
+                    const toolPartId = randomUUID();
+                    const toolData: PartData = {
+                        type: "tool",
+                        tool: part.toolName,
+                        callID: part.toolCallId,
+                        state: {
+                            status: "running",
+                            input: part.input as Record<string, unknown>,
+                            time: { start: Date.now() },
+                        },
+                    };
+
+                    await upsertPart({
+                        id: toolPartId,
+                        messageId: assistantMessageId,
+                        sessionId,
+                        data: toolData,
+                    });
+
+                    sessionBus.emit(sessionId, {
+                        sessionId,
+                        messageId: assistantMessageId,
+                        partId: toolPartId,
+                        type: "part-created",
+                        data: toolData,
+                        timestamp: Date.now(),
                     });
                     break;
                 }
@@ -193,10 +254,47 @@ export async function executeRun(input: ExecuteRunInput): Promise<void> {
                         JSON.stringify(part.output, null, 2),
                     );
 
-                    await persistEvent(input.runId, "tool-result", {
-                        toolName: part.toolName,
-                        output: part.output,
-                    });
+                    const existingParts = await listPartsByMessageId(assistantMessageId);
+                    const matchingPart = existingParts.find(
+                        (p) =>
+                            p.data.type === "tool" &&
+                            p.data.callID === part.toolCallId,
+                    );
+
+                    if (matchingPart && matchingPart.data.type === "tool") {
+                        const startTs =
+                            matchingPart.data.state.status === "running"
+                                ? matchingPart.data.state.time.start
+                                : Date.now();
+
+                        const updatedData: PartData = {
+                            type: "tool",
+                            tool: part.toolName,
+                            callID: part.toolCallId,
+                            state: {
+                                status: "completed",
+                                input: matchingPart.data.state.input,
+                                output: JSON.stringify(part.output),
+                                time: { start: startTs, end: Date.now() },
+                            },
+                        };
+
+                        await upsertPart({
+                            id: matchingPart.id,
+                            messageId: assistantMessageId,
+                            sessionId,
+                            data: updatedData,
+                        });
+
+                        sessionBus.emit(sessionId, {
+                            sessionId,
+                            messageId: assistantMessageId,
+                            partId: matchingPart.id,
+                            type: "part-updated",
+                            data: updatedData,
+                            timestamp: Date.now(),
+                        });
+                    }
                     break;
                 }
 
@@ -204,8 +302,27 @@ export async function executeRun(input: ExecuteRunInput): Promise<void> {
                     const errorMessage = serializeError(part.error);
                     console.error("[Error]:", part.error);
 
-                    await persistEvent(input.runId, "error", {
+                    const errorPartId = randomUUID();
+                    const errorData: PartData = {
+                        type: "error",
                         error: errorMessage,
+                        time: { created: Date.now() },
+                    };
+
+                    await upsertPart({
+                        id: errorPartId,
+                        messageId: assistantMessageId,
+                        sessionId,
+                        data: errorData,
+                    });
+
+                    sessionBus.emit(sessionId, {
+                        sessionId,
+                        messageId: assistantMessageId,
+                        partId: errorPartId,
+                        type: "part-created",
+                        data: errorData,
+                        timestamp: Date.now(),
                     });
                     break;
                 }
@@ -214,44 +331,119 @@ export async function executeRun(input: ExecuteRunInput): Promise<void> {
 
         console.log();
 
-        if (assistantText.trim().length > 0) {
-            await insertMessage({
-                id: randomUUID(),
-                sessionId: input.sessionId,
-                role: "assistant",
-                content: assistantText,
+        if (textPartId && assistantText.trim().length > 0) {
+            await upsertPart({
+                id: textPartId,
+                messageId: assistantMessageId,
+                sessionId,
+                data: {
+                    type: "text",
+                    text: assistantText,
+                    time: { start: textStartTime, end: Date.now() },
+                },
+            });
+
+            sessionBus.emit(sessionId, {
+                sessionId,
+                messageId: assistantMessageId,
+                partId: textPartId,
+                type: "part-updated",
+                data: {
+                    type: "text",
+                    text: assistantText,
+                    time: { start: textStartTime, end: Date.now() },
+                },
+                timestamp: Date.now(),
             });
         }
 
-        await markRunCompleted(input.runId);
+        const finalStatus = abortSignal.aborted ? "cancelled" : "completed";
 
-        await persistEvent(input.runId, "done", {
-            message: "Stream complete",
+        await upsertMessage({
+            id: assistantMessageId,
+            sessionId,
+            data: {
+                role: "assistant",
+                time: { created: startTime, completed: Date.now() },
+                model: "claude-sonnet-4-5",
+                finish: finalStatus,
+            },
+        });
+
+        sessionBus.emit(sessionId, {
+            sessionId,
+            messageId: assistantMessageId,
+            type: "message-updated",
+            data: { finish: finalStatus },
+            timestamp: Date.now(),
+        });
+
+        if (abortSignal.aborted) {
+            sessionBus.emit(sessionId, {
+                sessionId,
+                type: "cancelled",
+                data: { runId },
+                timestamp: Date.now(),
+            });
+        }
+
+        sessionBus.emit(sessionId, {
+            sessionId,
+            type: "status-change",
+            data: { status: finalStatus, runId },
+            timestamp: Date.now(),
         });
     } catch (error) {
         const errorMessage = serializeError(error);
-        console.error("[Run failed]:", error);
+        console.error("[Agent failed]:", error);
 
-        await markRunFailed(input.runId, errorMessage);
-
-        await persistEvent(input.runId, "error", {
+        const errorPartId = randomUUID();
+        const errorData: PartData = {
+            type: "error",
             error: errorMessage,
+            fatal: true,
+            time: { created: Date.now() },
+        };
+
+        await upsertPart({
+            id: errorPartId,
+            messageId: assistantMessageId,
+            sessionId,
+            data: errorData,
         });
+
+        await upsertMessage({
+            id: assistantMessageId,
+            sessionId,
+            data: {
+                role: "assistant",
+                time: { created: startTime, completed: Date.now() },
+                model: "claude-sonnet-4-5",
+                finish: "failed",
+                error: errorMessage,
+            },
+        });
+
+        sessionBus.emit(sessionId, {
+            sessionId,
+            messageId: assistantMessageId,
+            partId: errorPartId,
+            type: "part-created",
+            data: errorData,
+            timestamp: Date.now(),
+        });
+
+        sessionBus.emit(sessionId, {
+            sessionId,
+            type: "status-change",
+            data: { status: "failed", runId, error: errorMessage },
+            timestamp: Date.now(),
+        });
+    } finally {
+        sessionBus.finishRun(sessionId);
     }
 }
 
-export function isTerminalRunStatus(status: RunStatus): boolean {
-    return (
-        status === "completed" || status === "failed" || status === "cancelled"
-    );
-}
-
-export async function getRunOrThrow(runId: string) {
-    const run = await getRunById(runId);
-
-    if (!run) {
-        throw new Error(`Run not found: ${runId}`);
-    }
-
-    return run;
+export function cancelSession(sessionId: string): boolean {
+    return sessionBus.cancelRun(sessionId);
 }

@@ -2,33 +2,112 @@ import { sql } from "drizzle-orm";
 import * as t from "drizzle-orm/sqlite-core";
 
 export const sessionStatusValues = ["active", "archived"] as const;
-export const messageRoleValues = [
-    "system",
-    "user",
-    "assistant",
+export const messageRoleValues = ["user", "assistant"] as const;
+export const partTypeValues = [
+    "text",
+    "reasoning",
     "tool",
-] as const;
-export const runStatusValues = [
-    "queued",
-    "running",
-    "completed",
-    "failed",
-    "cancelled",
-] as const;
-export const runEventTypeValues = [
-    "run-created",
-    "run-started",
-    "text-delta",
-    "tool-call",
-    "tool-result",
     "error",
-    "done",
+    "step-start",
+    "step-finish",
 ] as const;
 
 export type SessionStatus = (typeof sessionStatusValues)[number];
 export type MessageRole = (typeof messageRoleValues)[number];
-export type RunStatus = (typeof runStatusValues)[number];
-export type RunEventType = (typeof runEventTypeValues)[number];
+export type PartType = (typeof partTypeValues)[number];
+
+export type UserMessageData = {
+    role: "user";
+    content: string;
+    time: { created: number };
+};
+
+export type AssistantMessageData = {
+    role: "assistant";
+    time: { created: number; completed?: number };
+    model: string;
+    tokens?: {
+        input: number;
+        output: number;
+    };
+    cost?: number;
+    finish?: string;
+    error?: string;
+};
+
+export type MessageData = UserMessageData | AssistantMessageData;
+
+export type TextPartData = {
+    type: "text";
+    text: string;
+    time: { start: number; end?: number };
+};
+
+export type ReasoningPartData = {
+    type: "reasoning";
+    text: string;
+    time: { start: number; end?: number };
+};
+
+export type ToolPartState =
+    | {
+          status: "pending";
+          input: Record<string, unknown>;
+      }
+    | {
+          status: "running";
+          input: Record<string, unknown>;
+          time: { start: number };
+      }
+    | {
+          status: "completed";
+          input: Record<string, unknown>;
+          output: string;
+          time: { start: number; end: number };
+      }
+    | {
+          status: "error";
+          input: Record<string, unknown>;
+          error: string;
+          time: { start: number; end: number };
+      };
+
+export type ToolPartData = {
+    type: "tool";
+    tool: string;
+    callID: string;
+    state: ToolPartState;
+};
+
+export type ErrorPartData = {
+    type: "error";
+    error: string;
+    fatal?: boolean;
+    time: { created: number };
+};
+
+export type StepStartPartData = {
+    type: "step-start";
+    time: { start: number };
+};
+
+export type StepFinishPartData = {
+    type: "step-finish";
+    reason: string;
+    time: { start: number; end: number };
+    tokens?: {
+        input: number;
+        output: number;
+    };
+};
+
+export type PartData =
+    | TextPartData
+    | ReasoningPartData
+    | ToolPartData
+    | ErrorPartData
+    | StepStartPartData
+    | StepFinishPartData;
 
 export const sessions = t.sqliteTable(
     "sessions",
@@ -40,14 +119,8 @@ export const sessions = t.sqliteTable(
             .$type<SessionStatus>()
             .notNull()
             .default("active"),
-        createdAt: t
-            .text("created_at")
-            .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
-        updatedAt: t
-            .text("updated_at")
-            .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
+        createdAt: t.integer("created_at").notNull(),
+        updatedAt: t.integer("updated_at").notNull(),
     },
     (table) => [
         t.check(
@@ -66,86 +139,37 @@ export const messages = t.sqliteTable(
             .text("session_id")
             .notNull()
             .references(() => sessions.id, { onDelete: "cascade" }),
-        role: t.text("role").$type<MessageRole>().notNull(),
-        content: t.text("content").notNull(),
-        metadata: t.text("metadata"),
-        createdAt: t
-            .text("created_at")
+        createdAt: t.integer("created_at").notNull(),
+        updatedAt: t.integer("updated_at").notNull(),
+        data: t
+            .text("data", { mode: "json" })
             .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
+            .$type<MessageData>(),
     },
     (table) => [
-        t.check(
-            "messages_role_check",
-            sql`${table.role} in ('system', 'user', 'assistant', 'tool')`,
-        ),
-        t
-            .index("messages_session_id_created_at_idx")
-            .on(table.sessionId, table.createdAt),
+        t.index("messages_session_idx").on(table.sessionId),
     ],
 );
 
-export const runs = t.sqliteTable(
-    "runs",
+export const parts = t.sqliteTable(
+    "parts",
     {
         id: t.text("id").primaryKey(),
-        sessionId: t
-            .text("session_id")
+        messageId: t
+            .text("message_id")
             .notNull()
-            .references(() => sessions.id, { onDelete: "cascade" }),
-        status: t.text("status").$type<RunStatus>().notNull().default("queued"),
-        prompt: t.text("prompt").notNull(),
-        error: t.text("error"),
-        startedAt: t.text("started_at"),
-        completedAt: t.text("completed_at"),
-        createdAt: t
-            .text("created_at")
+            .references(() => messages.id, { onDelete: "cascade" }),
+        sessionId: t.text("session_id").notNull(),
+        createdAt: t.integer("created_at").notNull(),
+        updatedAt: t.integer("updated_at").notNull(),
+        data: t
+            .text("data", { mode: "json" })
             .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
-        updatedAt: t
-            .text("updated_at")
-            .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
+            .$type<PartData>(),
     },
     (table) => [
-        t.check(
-            "runs_status_check",
-            sql`${table.status} in ('queued', 'running', 'completed', 'failed', 'cancelled')`,
-        ),
-        t
-            .index("runs_session_id_created_at_idx")
-            .on(table.sessionId, table.createdAt),
-        t.index("runs_status_idx").on(table.status),
-    ],
-);
-
-export const runEvents = t.sqliteTable(
-    "run_events",
-    {
-        id: t.integer("id").primaryKey({ autoIncrement: true }),
-        runId: t
-            .text("run_id")
-            .notNull()
-            .references(() => runs.id, { onDelete: "cascade" }),
-        eventType: t.text("event_type").$type<RunEventType>().notNull(),
-        eventData: t.text("event_data").notNull(),
-        sequence: t.integer("sequence").notNull(),
-        createdAt: t
-            .text("created_at")
-            .notNull()
-            .default(sql`CURRENT_TIMESTAMP`),
-    },
-    (table) => [
-        t.check(
-            "run_events_event_type_check",
-            sql`${table.eventType} in ('run-created', 'run-started', 'text-delta', 'tool-call', 'tool-result', 'error', 'done')`,
-        ),
-        t
-            .uniqueIndex("run_events_run_id_sequence_unique")
-            .on(table.runId, table.sequence),
-        t
-            .index("run_events_run_id_sequence_idx")
-            .on(table.runId, table.sequence),
+        t.index("parts_message_idx").on(table.messageId),
+        t.index("parts_session_idx").on(table.sessionId),
     ],
 );
 
@@ -155,8 +179,5 @@ export type NewSession = typeof sessions.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 
-export type Run = typeof runs.$inferSelect;
-export type NewRun = typeof runs.$inferInsert;
-
-export type RunEvent = typeof runEvents.$inferSelect;
-export type NewRunEvent = typeof runEvents.$inferInsert;
+export type Part = typeof parts.$inferSelect;
+export type NewPart = typeof parts.$inferInsert;

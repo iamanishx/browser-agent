@@ -26,6 +26,9 @@ export function runMigrations(): MigrationResult {
         sqlite.run("PRAGMA busy_timeout = 5000;");
         sqlite.run("PRAGMA temp_store = MEMORY;");
 
+        sqlite.run("DROP TABLE IF EXISTS run_events;");
+        sqlite.run("DROP TABLE IF EXISTS runs;");
+
         const db = drizzle({ client: sqlite });
 
         migrate(db, {
@@ -33,12 +36,7 @@ export function runMigrations(): MigrationResult {
         });
 
         const row = sqlite
-            .query(
-                `
-          SELECT COUNT(*) as count
-          FROM __drizzle_migrations
-        `,
-            )
+            .query("SELECT COUNT(*) as count FROM __drizzle_migrations")
             .get() as { count: number } | null;
 
         return {
