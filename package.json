@@ -1,5 +1,5 @@
 {
-    "name": "pos-agent",
+    "name": "browser-agent",
     "module": "index.ts",
     "type": "module",
     "private": true,

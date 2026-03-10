@@ -40,3 +40,14 @@ export async function sendMessage(
 export async function cancelRun(sessionId: string): Promise<void> {
   await request(`/sessions/${sessionId}/cancel`, { method: 'POST' })
 }
+
+export async function submitInterrupt(
+  sessionId: string,
+  requestId: string,
+  value: string,
+): Promise<void> {
+  await request(`/sessions/${sessionId}/interrupt/${requestId}`, {
+    method: 'POST',
+    body: JSON.stringify({ value }),
+  })
+}

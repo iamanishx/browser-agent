@@ -10,6 +10,7 @@ export const partTypeValues = [
     "error",
     "step-start",
     "step-finish",
+    "input-required",
 ] as const;
 
 export type SessionStatus = (typeof sessionStatusValues)[number];
@@ -101,13 +102,23 @@ export type StepFinishPartData = {
     };
 };
 
+export type InputRequiredPartData = {
+    type: "input-required";
+    requestId: string;
+    prompt: string;
+    inputType: "otp" | "text" | "password";
+    status: "pending" | "completed" | "cancelled" | "timed-out";
+    time: { created: number; resolved?: number };
+};
+
 export type PartData =
     | TextPartData
     | ReasoningPartData
     | ToolPartData
     | ErrorPartData
     | StepStartPartData
-    | StepFinishPartData;
+    | StepFinishPartData
+    | InputRequiredPartData;
 
 export const sessions = t.sqliteTable(
     "sessions",

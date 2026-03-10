@@ -110,6 +110,7 @@
 .chat--empty {
   align-items: center;
   justify-content: center;
+  display: flex;
 }
 
 .chat-empty-text {
@@ -361,4 +362,97 @@
 
 .part-error--fatal {
   font-weight: 500;
+}
+
+/* ─── Input prompt (human-in-the-loop) ───────────────────────────────────── */
+
+.input-prompt {
+  border-top: 1px solid #e8e8e8;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fafafa;
+}
+
+.input-prompt-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.input-prompt-text {
+  font-size: 13px;
+  color: #111;
+}
+
+.input-prompt-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-prompt-input {
+  flex: 1;
+  height: 34px;
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #111;
+  background: #fff;
+}
+
+.input-prompt-input:focus {
+  outline: none;
+  border-color: #aaa;
+}
+
+.input-prompt-input:disabled {
+  background: #f5f5f5;
+  color: #999;
+}
+
+/* ─── input-required part ────────────────────────────────────────────────── */
+
+.part-input-required {
+  border: 1px solid #e8e8e8;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.part-input-required--pending {
+  border-color: #f0c040;
+  background: #fffdf0;
+}
+
+.part-input-required--completed {
+  color: #888;
+}
+
+.part-input-required--cancelled,
+.part-input-required--timed-out {
+  color: #c00;
+}
+
+.part-input-status {
+  font-size: 11px;
+  color: #999;
+  margin-left: auto;
+}
+
+.part-input-pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f0c040;
+  animation: blink 1.2s infinite;
+  flex-shrink: 0;
 }

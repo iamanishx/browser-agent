@@ -165,7 +165,11 @@ async function executeAgent(input: ExecuteAgentInput): Promise<void> {
     let textStartTime = 0;
 
     try {
-        const agent = await createWebAgent();
+        const agent = await createWebAgent({
+            sessionId,
+            messageId: assistantMessageId,
+            abortSignal,
+        });
         const result = await agent.stream({
             prompt: input.promptWithHistory,
         });

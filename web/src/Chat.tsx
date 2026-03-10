@@ -1,17 +1,29 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Message } from './Message'
-import type { AgentStatus, MessageEnvelope } from './types'
+import { InputPrompt } from './InputPrompt'
+import type { AgentStatus, MessageEnvelope, PendingInterrupt } from './types'
 
 type Props = {
   sessionId: string | null
   messages: MessageEnvelope[]
   streamingText: Record<string, string>
   agentStatus: AgentStatus
+  pendingInterrupt: PendingInterrupt | null
   onSend: (content: string) => void
   onCancel: () => void
+  onSubmitInterrupt: (requestId: string, value: string) => void
 }
 
-export function Chat({ sessionId, messages, streamingText, agentStatus, onSend, onCancel }: Props) {
+export function Chat({
+  sessionId,
+  messages,
+  streamingText,
+  agentStatus,
+  pendingInterrupt,
+  onSend,
+  onCancel,
+  onSubmitInterrupt,
+}: Props) {
   const [draft, setDraft] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -47,8 +59,45 @@ export function Chat({ sessionId, messages, streamingText, agentStatus, onSend, 
 
   if (!sessionId) {
     return (
-      <div className="chat chat--empty">
-        <p className="chat-empty-text">Select a session or start a new one</p>
+      <div className="chat">
+        <div className="chat-messages chat--empty">
+          <p className="chat-empty-text">Start a new session by sending a message</p>
+        </div>
+        <div className="chat-input-bar">
+          <textarea
+            className="chat-textarea"
+            value={draft}
+            placeholder="Message…"
+            rows={1}
+            onChange={(e) => {
+              setDraft(e.target.value)
+              autoResize(e.target)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                const content = draft.trim()
+                if (!content) return
+                setDraft('')
+                onSend(content)
+              }
+            }}
+          />
+          <div className="chat-input-actions">
+            <button
+              className="btn btn--send"
+              onClick={() => {
+                const content = draft.trim()
+                if (!content) return
+                setDraft('')
+                onSend(content)
+              }}
+              disabled={!draft.trim()}
+            >
+              Send
+            </button>
+          </div>
+        </div>
       </div>
     )
   }
@@ -64,6 +113,10 @@ export function Chat({ sessionId, messages, streamingText, agentStatus, onSend, 
         ))}
         <div ref={bottomRef} />
       </div>
+
+      {pendingInterrupt && (
+        <InputPrompt interrupt={pendingInterrupt} onSubmit={onSubmitInterrupt} />
+      )}
 
       <div className="chat-input-bar">
         <textarea

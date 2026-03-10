@@ -3,7 +3,10 @@ import { sendMessage, cancelSession } from "./service";
 import {
     listSessions,
     getSessionWithMessages,
+    getSessionById,
 } from "../db/db";
+import { resolveInterruptRequest } from "../interrupts/interrupt-store";
+import { sessionBus } from "../events/event-bus";
 
 function isNonEmptyString(value: unknown): value is string {
     return typeof value === "string" && value.trim().length > 0;
@@ -143,4 +146,49 @@ export async function handleCancelSession(c: Context) {
 
     const cancelled = cancelSession(sessionId);
     return c.json({ ok: true, cancelled });
+}
+
+export async function handleSubmitInterrupt(c: Context) {
+    const sessionId = c.req.param("sessionId");
+    const requestId = c.req.param("requestId");
+
+    if (!sessionId || !requestId) {
+        return c.json({ error: "Missing sessionId or requestId" }, 400);
+    }
+
+    const session = await getSessionById(sessionId);
+    if (!session) {
+        return c.json({ error: "Session not found" }, 404);
+    }
+
+    let body: { value?: string };
+    try {
+        body = await c.req.json();
+    } catch {
+        return c.json({ error: "Request body must be valid JSON" }, 400);
+    }
+
+    if (!isNonEmptyString(body.value)) {
+        return c.json(
+            { error: "`value` is required and must be a non-empty string" },
+            400,
+        );
+    }
+
+    const resolved = resolveInterruptRequest(requestId, body.value);
+    if (!resolved) {
+        return c.json(
+            { error: "No pending interrupt with that ID" },
+            404,
+        );
+    }
+
+    sessionBus.emit(sessionId, {
+        sessionId,
+        type: "input-resolved",
+        data: { requestId },
+        timestamp: Date.now(),
+    });
+
+    return c.json({ ok: true }, 202);
 }

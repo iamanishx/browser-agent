@@ -2,7 +2,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import { resolve } from "path";
 
-const ROOT = "/home/manish/pos-agent";
+const ROOT = "/home/manish/browser-agent";
 
 export const bashTool = tool({
     description: `Execute a shell command. All commands run inside ${ROOT}.`,

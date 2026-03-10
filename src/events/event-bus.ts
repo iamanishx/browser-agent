@@ -7,7 +7,9 @@ export type SessionEventType =
     | "part-updated"
     | "part-delta"
     | "status-change"
-    | "cancelled";
+    | "cancelled"
+    | "input-required"
+    | "input-resolved";
 
 export type SessionEvent = {
     sessionId: string;

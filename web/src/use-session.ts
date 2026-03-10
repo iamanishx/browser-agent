@@ -5,6 +5,7 @@ import type {
   MessageEnvelope,
   PartData,
   PartEnvelope,
+  PendingInterrupt,
   SessionInfo,
 } from './types'
 
@@ -13,6 +14,7 @@ type State = {
   messages: MessageEnvelope[]
   streamingText: Record<string, string>
   agentStatus: AgentStatus
+  pendingInterrupt: PendingInterrupt | null
 }
 
 type Action =
@@ -25,6 +27,8 @@ type Action =
   | { type: 'PART_DELTA'; payload: { messageId: string; partId: string; text: string } }
   | { type: 'STATUS_CHANGE'; payload: { status: AgentStatus } }
   | { type: 'CANCELLED' }
+  | { type: 'INPUT_REQUIRED'; payload: PendingInterrupt }
+  | { type: 'INPUT_RESOLVED'; payload: { requestId: string } }
   | { type: 'RESET' }
 
 function upsertPart(parts: PartEnvelope[], partId: string, data: PartData): PartEnvelope[] {
@@ -100,17 +104,30 @@ function reducer(state: State, action: Action): State {
 
     case 'STATUS_CHANGE': {
       const { status } = action.payload
-      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-        return { ...state, agentStatus: status, streamingText: {} }
+      const terminal = status === 'completed' || status === 'failed' || status === 'cancelled'
+      return {
+        ...state,
+        agentStatus: status,
+        streamingText: terminal ? {} : state.streamingText,
+        pendingInterrupt: terminal ? null : state.pendingInterrupt,
       }
-      return { ...state, agentStatus: status }
     }
 
     case 'CANCELLED':
-      return { ...state, agentStatus: 'cancelled', streamingText: {} }
+      return { ...state, agentStatus: 'cancelled', streamingText: {}, pendingInterrupt: null }
+
+    case 'INPUT_REQUIRED':
+      return { ...state, pendingInterrupt: action.payload }
+
+    case 'INPUT_RESOLVED': {
+      if (state.pendingInterrupt?.requestId === action.payload.requestId) {
+        return { ...state, pendingInterrupt: null }
+      }
+      return state
+    }
 
     case 'RESET':
-      return { session: null, messages: [], streamingText: {}, agentStatus: 'idle' }
+      return { session: null, messages: [], streamingText: {}, agentStatus: 'idle', pendingInterrupt: null }
 
     default:
       return state
@@ -122,6 +139,7 @@ const initial: State = {
   messages: [],
   streamingText: {},
   agentStatus: 'idle',
+  pendingInterrupt: null,
 }
 
 export type UseSessionResult = State & { lastEventId: number }
@@ -224,6 +242,26 @@ export function useSession(sessionId: string | null): UseSessionResult {
           dispatch({ type: 'CANCELLED' })
           break
 
+        case 'input-required':
+          dispatch({
+            type: 'INPUT_REQUIRED',
+            payload: {
+              requestId: payload.requestId as string,
+              messageId: payload.messageId as string,
+              partId: payload.partId as string,
+              prompt: payload.prompt as string,
+              inputType: (payload.inputType as 'otp' | 'text' | 'password') ?? 'otp',
+            },
+          })
+          break
+
+        case 'input-resolved':
+          dispatch({
+            type: 'INPUT_RESOLVED',
+            payload: { requestId: payload.requestId as string },
+          })
+          break
+
         case 'heartbeat':
         case 'error':
           break
@@ -240,6 +278,8 @@ export function useSession(sessionId: string | null): UseSessionResult {
       'part-delta',
       'status-change',
       'cancelled',
+      'input-required',
+      'input-resolved',
       'heartbeat',
       'error',
     ]

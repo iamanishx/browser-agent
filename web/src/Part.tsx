@@ -54,5 +54,46 @@ export function Part({ data, streamingText }: Props) {
     )
   }
 
+  if (data.type === 'input-required') {
+    const { prompt, status } = data
+
+    if (status === 'pending') {
+      return (
+        <div className="part-input-required part-input-required--pending">
+          <span className="part-input-pending-dot" />
+          <span>{prompt}</span>
+          <span className="part-input-status">waiting for input</span>
+        </div>
+      )
+    }
+
+    if (status === 'completed') {
+      return (
+        <div className="part-input-required part-input-required--completed">
+          <span>{prompt}</span>
+          <span className="part-input-status">input provided</span>
+        </div>
+      )
+    }
+
+    if (status === 'cancelled') {
+      return (
+        <div className="part-input-required part-input-required--cancelled">
+          <span>{prompt}</span>
+          <span className="part-input-status">cancelled</span>
+        </div>
+      )
+    }
+
+    if (status === 'timed-out') {
+      return (
+        <div className="part-input-required part-input-required--timed-out">
+          <span>{prompt}</span>
+          <span className="part-input-status">timed out</span>
+        </div>
+      )
+    }
+  }
+
   return null
 }

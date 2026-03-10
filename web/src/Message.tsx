@@ -24,7 +24,11 @@ export function Message({ message, streamingText }: Props) {
   }
 
   const visibleParts = parts.filter(
-    (p) => p.data.type === 'text' || p.data.type === 'tool' || p.data.type === 'error',
+    (p) =>
+      p.data.type === 'text' ||
+      p.data.type === 'tool' ||
+      p.data.type === 'error' ||
+      p.data.type === 'input-required',
   )
 
   const isStreaming = Object.keys(streamingText).length > 0

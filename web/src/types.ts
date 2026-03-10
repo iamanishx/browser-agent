@@ -72,6 +72,15 @@ export type StepFinishPartData = {
   tokens?: { input: number; output: number }
 }
 
+export type InputRequiredPartData = {
+  type: 'input-required'
+  requestId: string
+  prompt: string
+  inputType: 'otp' | 'text' | 'password'
+  status: 'pending' | 'completed' | 'cancelled' | 'timed-out'
+  time: { created: number; resolved?: number }
+}
+
 export type PartData =
   | TextPartData
   | ReasoningPartData
@@ -79,6 +88,7 @@ export type PartData =
   | ErrorPartData
   | StepStartPartData
   | StepFinishPartData
+  | InputRequiredPartData
 
 export type PartEnvelope = {
   id: string
@@ -103,3 +113,11 @@ export type SessionInfo = {
 }
 
 export type AgentStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export type PendingInterrupt = {
+  requestId: string
+  messageId: string
+  partId: string
+  prompt: string
+  inputType: 'otp' | 'text' | 'password'
+}

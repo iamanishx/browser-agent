@@ -1,9 +1,13 @@
-import { ToolLoopAgent, stepCountIs } from "ai";
+import { ToolLoopAgent, stepCountIs, type ToolSet } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromIni } from "@aws-sdk/credential-providers";
 import { bashTool } from "../tools/bash";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+    makeRequestHumanInputTool,
+    type InterruptContext,
+} from "../tools/request-human-input";
 
 export type PersistedMessageRole = "system" | "user" | "assistant";
 
@@ -90,7 +94,7 @@ export function buildAgentPrompt({
     ].join("\n");
 }
 
-export async function createWebAgent() {
+export async function createWebAgent(interruptCtx?: InterruptContext) {
     const fsClient = await createMCPClient({
         transport: new StdioClientTransport({
             command: "npx",
@@ -103,9 +107,18 @@ export async function createWebAgent() {
         }),
     });
 
+    const tools: ToolSet = {
+        bashTool,
+        ...fsClient.tools,
+    };
+
+    if (interruptCtx) {
+        tools.request_human_input = makeRequestHumanInputTool(interruptCtx);
+    }
+
     return new ToolLoopAgent({
         model: bedrock("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
-        tools: { bashTool, ...fsClient.tools },
+        tools,
         stopWhen: stepCountIs(20),
         instructions: BASE_INSTRUCTIONS,
     });

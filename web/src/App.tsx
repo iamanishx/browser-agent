@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-import { cancelRun, createSession, listSessions, sendMessage } from './api'
+import { cancelRun, createSession, listSessions, sendMessage, submitInterrupt } from './api'
 import { Chat } from './Chat'
 import { Sidebar } from './Sidebar'
 import type { SessionInfo } from './types'
@@ -10,7 +10,7 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const { messages, streamingText, agentStatus } = useSession(selectedId)
+  const { messages, streamingText, agentStatus, pendingInterrupt } = useSession(selectedId)
 
   useEffect(() => {
     listSessions()
@@ -48,6 +48,15 @@ export default function App() {
     }
   }
 
+  async function handleSubmitInterrupt(requestId: string, value: string) {
+    if (!selectedId) return
+    try {
+      await submitInterrupt(selectedId, requestId, value)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
   return (
     <div className="app">
       <Sidebar
@@ -61,8 +70,10 @@ export default function App() {
         messages={messages}
         streamingText={streamingText}
         agentStatus={agentStatus}
+        pendingInterrupt={pendingInterrupt}
         onSend={handleSend}
         onCancel={handleCancel}
+        onSubmitInterrupt={handleSubmitInterrupt}
       />
     </div>
   )
