@@ -1,3 +1,4 @@
+import Markdown from 'react-markdown'
 import { Part } from './Part'
 import type { MessageEnvelope } from './types'
 
@@ -31,8 +32,9 @@ export function Message({ message, streamingText }: Props) {
       p.data.type === 'input-required',
   )
 
-  const isStreaming = Object.keys(streamingText).length > 0
-  const hasContent = visibleParts.length > 0 || isStreaming
+  const activeStreamEntries = Object.entries(streamingText)
+  const hasActiveStream = activeStreamEntries.length > 0
+  const hasContent = visibleParts.length > 0 || hasActiveStream
 
   if (!hasContent) {
     return (
@@ -54,11 +56,11 @@ export function Message({ message, streamingText }: Props) {
             streamingText={part.data.type === 'text' ? streamingText[part.id] : undefined}
           />
         ))}
-        {isStreaming && visibleParts.every((p) => p.data.type !== 'text') && (
-          <p className="part-text">
-            {Object.values(streamingText).join('')}
-          </p>
-        )}
+        {activeStreamEntries
+          .filter(([id]) => !visibleParts.some((p) => p.id === id))
+          .map(([id, text]) => (
+            <div key={id} className="part-text"><Markdown>{text}</Markdown></div>
+          ))}
       </div>
       <span className="message-time">{formatTime(createdAt)}</span>
     </div>

@@ -1,3 +1,4 @@
+import Markdown from 'react-markdown'
 import type { PartData } from './types'
 
 type Props = {
@@ -9,7 +10,7 @@ export function Part({ data, streamingText }: Props) {
   if (data.type === 'text') {
     const text = streamingText !== undefined ? streamingText : data.text
     if (!text) return null
-    return <p className="part-text">{text}</p>
+    return <div className="part-text"><Markdown>{text}</Markdown></div>
   }
 
   if (data.type === 'tool') {

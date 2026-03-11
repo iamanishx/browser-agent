@@ -82,8 +82,13 @@ function reducer(state: State, action: Action): State {
     case 'PART_CREATED':
     case 'PART_UPDATED': {
       const { messageId, partId, data } = action.payload
+      const nextStreamingText = { ...state.streamingText }
+      if (data.type === 'text') {
+        delete nextStreamingText[partId]
+      }
       return {
         ...state,
+        streamingText: nextStreamingText,
         messages: state.messages.map((m) => {
           if (m.id !== messageId) return m
           return { ...m, parts: upsertPart(m.parts, partId, data) }

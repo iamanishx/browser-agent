@@ -257,16 +257,28 @@ async function executeAgent(input: ExecuteAgentInput): Promise<void> {
                     );
 
                     if (textPartId && assistantText.trim().length > 0) {
+                        const flushedTextData: PartData = {
+                            type: "text",
+                            text: assistantText,
+                            time: { start: textStartTime, end: Date.now() },
+                        };
+
                         await upsertPart({
                             id: textPartId,
                             messageId: assistantMessageId,
                             sessionId,
-                            data: {
-                                type: "text",
-                                text: assistantText,
-                                time: { start: textStartTime, end: Date.now() },
-                            },
+                            data: flushedTextData,
                         });
+
+                        sessionBus.emit(sessionId, {
+                            sessionId,
+                            messageId: assistantMessageId,
+                            partId: textPartId,
+                            type: "part-updated",
+                            data: flushedTextData,
+                            timestamp: Date.now(),
+                        });
+
                         textPartId = null;
                         assistantText = "";
                     }
