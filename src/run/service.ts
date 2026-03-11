@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type { ModelMessage, ImagePart, FilePart, TextPart } from "ai";
 import { buildAgentPrompt, createWebAgent } from "../agent/agents";
 import {
     createSessionIfMissing,
@@ -11,10 +12,17 @@ import {
 import type { PartData } from "../db/schema";
 import { sessionBus } from "../events/event-bus";
 
+export type Attachment = {
+    data: string;
+    mimeType: string;
+    name?: string;
+};
+
 export type SendMessageInput = {
     content: string;
     sessionId?: string;
     windowSize?: number;
+    attachments?: Attachment[];
 };
 
 export type SendMessageResult = {
@@ -41,32 +49,62 @@ function serializeError(error: unknown): string {
     }
 }
 
-async function toPromptHistory(messages: MessageRecord[]) {
-    const history: Array<{ role: "user" | "assistant"; content: string; createdAt: string }> = [];
+function buildUserContent(
+    text: string,
+    attachments: Attachment[],
+): string | Array<TextPart | ImagePart | FilePart> {
+    if (attachments.length === 0) return text;
 
-    for (const m of messages) {
+    const parts: Array<TextPart | ImagePart | FilePart> = [
+        { type: "text", text },
+    ];
+
+    for (const att of attachments) {
+        if (att.mimeType.startsWith("image/")) {
+            parts.push({
+                type: "image",
+                image: att.data,
+                mediaType: att.mimeType,
+            } as ImagePart);
+        } else {
+            parts.push({
+                type: "file",
+                data: att.data,
+                mediaType: att.mimeType,
+                filename: att.name,
+            } as FilePart);
+        }
+    }
+
+    return parts;
+}
+
+async function buildModelMessages(
+    priorMessages: MessageRecord[],
+    currentText: string,
+    attachments: Attachment[],
+): Promise<ModelMessage[]> {
+    const history: ModelMessage[] = [];
+
+    for (const m of priorMessages) {
         if (m.data.role === "user") {
-            history.push({
-                role: "user",
-                content: m.data.content,
-                createdAt: String(m.createdAt),
-            });
+            history.push({ role: "user", content: m.data.content });
         } else if (m.data.role === "assistant") {
             const msgParts = await listPartsByMessageId(m.id);
-            const textParts = msgParts
+            const text = msgParts
                 .filter((p) => p.data.type === "text")
-                .map((p) => (p.data as { type: "text"; text: string }).text);
-            const text = textParts.join("");
-
+                .map((p) => (p.data as { type: "text"; text: string }).text)
+                .join("");
             if (text.length > 0) {
-                history.push({
-                    role: "assistant",
-                    content: text,
-                    createdAt: String(m.createdAt),
-                });
+                history.push({ role: "assistant", content: text });
             }
         }
     }
+
+    history.push({
+        role: "user",
+        content: buildUserContent(currentText, attachments),
+    });
 
     return history;
 }
@@ -76,6 +114,7 @@ export async function sendMessage(
 ): Promise<SendMessageResult> {
     const sessionId = input.sessionId ?? randomUUID();
     const windowSize = normalizeWindowSize(input.windowSize);
+    const attachments = input.attachments ?? [];
 
     await createSessionIfMissing({ id: sessionId });
 
@@ -102,16 +141,27 @@ export async function sendMessage(
         sessionId,
         messageId: userMessageId,
         type: "message-created",
-        data: { role: "user", content: input.content },
+        data: {
+            role: "user",
+            content: input.content,
+            attachmentCount: attachments.length,
+        },
         timestamp: ts,
     });
 
     const priorMessages = await getSlidingWindowMessages(sessionId, windowSize);
-    const promptWithHistory = buildAgentPrompt({
+
+    const promptText = buildAgentPrompt({
         userPrompt: input.content,
-        history: await toPromptHistory(priorMessages),
-        maxHistoryMessages: windowSize,
+        history: [],
+        maxHistoryMessages: 0,
     });
+
+    const modelMessages = await buildModelMessages(
+        priorMessages,
+        promptText,
+        attachments,
+    );
 
     const runId = randomUUID();
     const abortController = sessionBus.startRun(sessionId, runId);
@@ -120,8 +170,7 @@ export async function sendMessage(
         void executeAgent({
             runId,
             sessionId,
-            originalPrompt: input.content,
-            promptWithHistory,
+            modelMessages,
             abortSignal: abortController.signal,
         });
     });
@@ -132,8 +181,7 @@ export async function sendMessage(
 type ExecuteAgentInput = {
     runId: string;
     sessionId: string;
-    originalPrompt: string;
-    promptWithHistory: string;
+    modelMessages: ModelMessage[];
     abortSignal: AbortSignal;
 };
 
@@ -170,8 +218,9 @@ async function executeAgent(input: ExecuteAgentInput): Promise<void> {
             messageId: assistantMessageId,
             abortSignal,
         });
+
         const result = await agent.stream({
-            prompt: input.promptWithHistory,
+            messages: input.modelMessages,
         });
 
         for await (const part of result.fullStream) {

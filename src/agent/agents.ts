@@ -4,8 +4,6 @@ import { fromIni } from "@aws-sdk/credential-providers";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { bashTool } from "../tools/bash";
-import { createMCPClient } from "@ai-sdk/mcp";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
     makeRequestHumanInputTool,
     type InterruptContext,
@@ -46,7 +44,11 @@ const SKILL_CONTENT = loadSkill();
 const BASE_INSTRUCTIONS = [
     "You are a browser automation agent.",
     "",
-    "Use the bash tool to run agent-browser CLI commands.",
+    "You have two tools:",
+    "1. bashTool — run any shell command: agent-browser CLI commands, cat, ls, grep, echo, curl, etc.",
+    "2. request_human_input — ask the user for OTPs, passwords, or any input a human must provide.",
+    "",
+    "Always use bashTool to read files (cat), list directories (ls), or run agent-browser commands.",
     "Always re-snapshot after any navigation or DOM change.",
     "When a site requires OTP, 2FA, or any human-only input, call the request_human_input tool — do NOT guess or skip it.",
     "",
@@ -113,21 +115,8 @@ export function buildAgentPrompt({
 }
 
 export async function createWebAgent(interruptCtx?: InterruptContext) {
-    const fsClient = await createMCPClient({
-        transport: new StdioClientTransport({
-            command: "npx",
-            args: [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                process.cwd(),
-            ],
-            stderr: "ignore",
-        }),
-    });
-
     const tools: ToolSet = {
         bashTool,
-        ...fsClient.tools,
     };
 
     if (interruptCtx) {

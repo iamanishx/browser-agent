@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { sendMessage, cancelSession } from "./service";
+import { sendMessage, cancelSession, type Attachment } from "./service";
 import {
     listSessions,
     getSessionWithMessages,
@@ -16,10 +16,35 @@ function isPositiveNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+function parseAttachments(raw: unknown): Attachment[] | null {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw)) return null;
+
+    const result: Attachment[] = [];
+    for (const item of raw) {
+        if (
+            typeof item !== "object" ||
+            item === null ||
+            typeof item.data !== "string" ||
+            typeof item.mimeType !== "string" ||
+            item.data.trim().length === 0 ||
+            item.mimeType.trim().length === 0
+        ) {
+            return null;
+        }
+        result.push({
+            data: item.data,
+            mimeType: item.mimeType,
+            name: typeof item.name === "string" ? item.name : undefined,
+        });
+    }
+    return result;
+}
+
 export async function handleSendMessage(c: Context) {
     const sessionId = c.req.param("sessionId");
 
-    let body: { content?: string; windowSize?: number };
+    let body: { content?: string; windowSize?: number; attachments?: unknown };
     try {
         body = await c.req.json();
     } catch {
@@ -40,11 +65,20 @@ export async function handleSendMessage(c: Context) {
         );
     }
 
+    const attachments = parseAttachments(body.attachments);
+    if (attachments === null) {
+        return c.json(
+            { error: "`attachments` must be an array of {data, mimeType, name?} objects" },
+            400,
+        );
+    }
+
     try {
         const result = await sendMessage({
             content: body.content.trim(),
             sessionId: sessionId || undefined,
             windowSize: body.windowSize,
+            attachments,
         });
 
         return c.json(
@@ -65,7 +99,7 @@ export async function handleSendMessage(c: Context) {
 }
 
 export async function handleCreateSession(c: Context) {
-    let body: { content?: string; windowSize?: number };
+    let body: { content?: string; windowSize?: number; attachments?: unknown };
     try {
         body = await c.req.json();
     } catch {
@@ -79,10 +113,19 @@ export async function handleCreateSession(c: Context) {
         );
     }
 
+    const attachments = parseAttachments(body.attachments);
+    if (attachments === null) {
+        return c.json(
+            { error: "`attachments` must be an array of {data, mimeType, name?} objects" },
+            400,
+        );
+    }
+
     try {
         const result = await sendMessage({
             content: body.content.trim(),
             windowSize: body.windowSize,
+            attachments,
         });
 
         return c.json(
