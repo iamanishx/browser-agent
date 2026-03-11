@@ -1,6 +1,8 @@
 import { ToolLoopAgent, stepCountIs, type ToolSet } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromIni } from "@aws-sdk/credential-providers";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { bashTool } from "../tools/bash";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -28,14 +30,30 @@ const bedrock = createAmazonBedrock({
     credentialProvider: fromIni({ profile: "clickpe" }),
 });
 
-const BASE_INSTRUCTIONS = `You are a browser automation agent. Use the bash tool to run agent-browser commands:
-- agent-browser open <url>
-- agent-browser snapshot -i
-- agent-browser click @e1
-- agent-browser fill @e2 "text"
-- agent-browser screenshot
-- agent-browser close
-Always re-snapshot after navigation. Default cwd: /home/manish/browser-agent for the further commands please do check the SKILL.md file.`;
+function loadSkill(): string {
+    const skillPath = resolve(process.cwd(), "SKILL.md");
+    try {
+        const raw = readFileSync(skillPath, "utf-8");
+        const body = raw.replace(/^---[\s\S]*?---\n/, "").trim();
+        return body;
+    } catch {
+        return "";
+    }
+}
+
+const SKILL_CONTENT = loadSkill();
+
+const BASE_INSTRUCTIONS = [
+    "You are a browser automation agent.",
+    "",
+    "Use the bash tool to run agent-browser CLI commands.",
+    "Always re-snapshot after any navigation or DOM change.",
+    "When a site requires OTP, 2FA, or any human-only input, call the request_human_input tool — do NOT guess or skip it.",
+    "",
+    SKILL_CONTENT,
+]
+    .join("\n")
+    .trim();
 
 function normalizeContent(value: string): string {
     return value.replace(/\r\n/g, "\n").trim();
