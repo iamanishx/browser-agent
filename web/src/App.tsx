@@ -3,7 +3,7 @@ import './App.css'
 import { cancelRun, createSession, listSessions, sendMessage, submitInterrupt } from './api'
 import { Chat } from './Chat'
 import { Sidebar } from './Sidebar'
-import type { SessionInfo } from './types'
+import type { Attachment, SessionInfo } from './types'
 import { useSession } from './use-session'
 
 export default function App() {
@@ -22,15 +22,15 @@ export default function App() {
     setSelectedId(null)
   }
 
-  async function handleSend(content: string) {
+  async function handleSend(content: string, attachments?: Attachment[]) {
     try {
       if (!selectedId) {
-        const { sessionId } = await createSession(content)
+        const { sessionId } = await createSession(content, attachments)
         const updated = await listSessions()
         setSessions(updated)
         setSelectedId(sessionId)
       } else {
-        await sendMessage(selectedId, content)
+        await sendMessage(selectedId, content, attachments)
         const updated = await listSessions()
         setSessions(updated)
       }
@@ -48,10 +48,10 @@ export default function App() {
     }
   }
 
-  async function handleSubmitInterrupt(requestId: string, value: string) {
+  async function handleSubmitInterrupt(requestId: string, value: string, attachments?: Attachment[]) {
     if (!selectedId) return
     try {
-      await submitInterrupt(selectedId, requestId, value)
+      await submitInterrupt(selectedId, requestId, value, attachments)
     } catch (err) {
       console.error(err)
     }

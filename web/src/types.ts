@@ -121,3 +121,9 @@ export type PendingInterrupt = {
   prompt: string
   inputType: 'otp' | 'text' | 'password'
 }
+
+export type Attachment = {
+  data: string
+  mimeType: string
+  name: string
+}

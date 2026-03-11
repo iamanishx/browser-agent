@@ -1,5 +1,5 @@
 import { API_BASE } from './config'
-import type { SessionInfo } from './types'
+import type { Attachment, SessionInfo } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -20,20 +20,22 @@ export async function listSessions(): Promise<SessionInfo[]> {
 
 export async function createSession(
   content: string,
+  attachments?: Attachment[],
 ): Promise<{ sessionId: string; streamUrl: string }> {
   return request('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, attachments }),
   })
 }
 
 export async function sendMessage(
   sessionId: string,
   content: string,
+  attachments?: Attachment[],
 ): Promise<{ sessionId: string; streamUrl: string }> {
   return request(`/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, attachments }),
   })
 }
 
@@ -45,9 +47,10 @@ export async function submitInterrupt(
   sessionId: string,
   requestId: string,
   value: string,
+  attachments?: Attachment[],
 ): Promise<void> {
   await request(`/sessions/${sessionId}/interrupt/${requestId}`, {
     method: 'POST',
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ value, attachments }),
   })
 }
