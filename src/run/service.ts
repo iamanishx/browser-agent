@@ -5,17 +5,23 @@ import {
     createSessionIfMissing,
     getSlidingWindowMessages,
     listPartsByMessageId,
+    listSessionFilesBySessionId,
     upsertMessage,
     upsertPart,
     type MessageRecord,
 } from "../db/db";
 import type { PartData } from "../db/schema";
+import {
+    storeAttachmentsForSession,
+    type StoredSessionFile,
+} from "../files/session-files";
 import { sessionBus } from "../events/event-bus";
 
 export type Attachment = {
     data: string;
     mimeType: string;
     name?: string;
+    store?: boolean;
 };
 
 export type SendMessageInput = {
@@ -109,6 +115,28 @@ async function buildModelMessages(
     return history;
 }
 
+function formatStoredFileContext(storedFiles: StoredSessionFile[]): string {
+    if (storedFiles.length === 0) {
+        return "";
+    }
+
+    const lines = storedFiles.map((file, index) => {
+        return [
+            `${index + 1}. ${file.originalName}`,
+            `   - mimeType: ${file.mimeType}`,
+            `   - relativePath: ${file.relativePath}`,
+            `   - absolutePath: ${file.absolutePath}`,
+        ].join("\n");
+    });
+
+    return [
+        "",
+        "Stored session files available on local disk:",
+        "Use these exact file paths with agent-browser upload when the website needs a CSV, PDF, image, or other file upload.",
+        ...lines,
+    ].join("\n");
+}
+
 export async function sendMessage(
     input: SendMessageInput,
 ): Promise<SendMessageResult> {
@@ -123,6 +151,19 @@ export async function sendMessage(
         sessionBus.cancelRun(sessionId);
         await Bun.sleep(100);
     }
+
+    const newlyStoredFiles = await storeAttachmentsForSession(
+        sessionId,
+        attachments,
+    );
+    const persistedSessionFiles = await listSessionFilesBySessionId(sessionId);
+    const allStoredFiles = persistedSessionFiles.map((file) => ({
+        ...file,
+        absolutePath: `${process.cwd()}/${file.relativePath}`.replace(
+            /\/+/g,
+            "/",
+        ),
+    }));
 
     const userMessageId = randomUUID();
     const ts = Date.now();
@@ -145,6 +186,7 @@ export async function sendMessage(
             role: "user",
             content: input.content,
             attachmentCount: attachments.length,
+            storedAttachmentCount: newlyStoredFiles.length,
         },
         timestamp: ts,
     });
@@ -152,7 +194,7 @@ export async function sendMessage(
     const priorMessages = await getSlidingWindowMessages(sessionId, windowSize);
 
     const promptText = buildAgentPrompt({
-        userPrompt: input.content,
+        userPrompt: `${input.content}${formatStoredFileContext(allStoredFiles)}`,
         history: [],
         maxHistoryMessages: 0,
     });
@@ -319,7 +361,8 @@ async function executeAgent(input: ExecuteAgentInput): Promise<void> {
                         JSON.stringify(part.output, null, 2),
                     );
 
-                    const existingParts = await listPartsByMessageId(assistantMessageId);
+                    const existingParts =
+                        await listPartsByMessageId(assistantMessageId);
                     const matchingPart = existingParts.find(
                         (p) =>
                             p.data.type === "tool" &&

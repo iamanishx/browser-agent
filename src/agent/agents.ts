@@ -51,6 +51,7 @@ const BASE_INSTRUCTIONS = [
     "Always use bashTool to read files (cat), list directories (ls), or run agent-browser commands.",
     "Always re-snapshot after any navigation or DOM change.",
     "When a site requires OTP, 2FA, or any human-only input, call the request_human_input tool — do NOT guess or skip it.",
+    "If the user prompt includes stored session file paths, those files exist on local disk and can be used directly with agent-browser upload.",
     "",
     SKILL_CONTENT,
 ]

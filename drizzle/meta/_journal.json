@@ -8,6 +8,13 @@
       "when": 1773136643631,
       "tag": "0000_peaceful_timeslip",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1773337868284,
+      "tag": "0001_first_vanisher",
+      "breakpoints": true
     }
   ]
 }

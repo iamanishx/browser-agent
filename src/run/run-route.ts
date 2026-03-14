@@ -1,10 +1,6 @@
 import type { Context } from "hono";
 import { sendMessage, cancelSession, type Attachment } from "./service";
-import {
-    listSessions,
-    getSessionWithMessages,
-    getSessionById,
-} from "../db/db";
+import { listSessions, getSessionWithMessages, getSessionById } from "../db/db";
 import { resolveInterruptRequest } from "../interrupts/interrupt-store";
 import { sessionBus } from "../events/event-bus";
 
@@ -36,6 +32,7 @@ function parseAttachments(raw: unknown): Attachment[] | null {
             data: item.data,
             mimeType: item.mimeType,
             name: typeof item.name === "string" ? item.name : undefined,
+            store: item.store === true,
         });
     }
     return result;
@@ -68,7 +65,9 @@ export async function handleSendMessage(c: Context) {
     const attachments = parseAttachments(body.attachments);
     if (attachments === null) {
         return c.json(
-            { error: "`attachments` must be an array of {data, mimeType, name?} objects" },
+            {
+                error: "`attachments` must be an array of {data, mimeType, name?} objects",
+            },
             400,
         );
     }
@@ -116,7 +115,9 @@ export async function handleCreateSession(c: Context) {
     const attachments = parseAttachments(body.attachments);
     if (attachments === null) {
         return c.json(
-            { error: "`attachments` must be an array of {data, mimeType, name?} objects" },
+            {
+                error: "`attachments` must be an array of {data, mimeType, name?} objects",
+            },
             400,
         );
     }
@@ -204,7 +205,7 @@ export async function handleSubmitInterrupt(c: Context) {
         return c.json({ error: "Session not found" }, 404);
     }
 
-    let body: { value?: string };
+    let body: { value?: string; attachments?: unknown };
     try {
         body = await c.req.json();
     } catch {
@@ -218,12 +219,19 @@ export async function handleSubmitInterrupt(c: Context) {
         );
     }
 
+    const attachments = parseAttachments(body.attachments);
+    if (attachments === null) {
+        return c.json(
+            {
+                error: "`attachments` must be an array of {data, mimeType, name?, store?} objects",
+            },
+            400,
+        );
+    }
+
     const resolved = resolveInterruptRequest(requestId, body.value);
     if (!resolved) {
-        return c.json(
-            { error: "No pending interrupt with that ID" },
-            404,
-        );
+        return c.json({ error: "No pending interrupt with that ID" }, 404);
     }
 
     sessionBus.emit(sessionId, {

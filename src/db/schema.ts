@@ -17,6 +17,17 @@ export type SessionStatus = (typeof sessionStatusValues)[number];
 export type MessageRole = (typeof messageRoleValues)[number];
 export type PartType = (typeof partTypeValues)[number];
 
+export type SessionFileData = {
+    id: string;
+    sessionId: string;
+    originalName: string;
+    storedName: string;
+    relativePath: string;
+    mimeType: string;
+    size: number;
+    createdAt: number;
+};
+
 export type UserMessageData = {
     role: "user";
     content: string;
@@ -152,14 +163,9 @@ export const messages = t.sqliteTable(
             .references(() => sessions.id, { onDelete: "cascade" }),
         createdAt: t.integer("created_at").notNull(),
         updatedAt: t.integer("updated_at").notNull(),
-        data: t
-            .text("data", { mode: "json" })
-            .notNull()
-            .$type<MessageData>(),
+        data: t.text("data", { mode: "json" }).notNull().$type<MessageData>(),
     },
-    (table) => [
-        t.index("messages_session_idx").on(table.sessionId),
-    ],
+    (table) => [t.index("messages_session_idx").on(table.sessionId)],
 );
 
 export const parts = t.sqliteTable(
@@ -173,14 +179,32 @@ export const parts = t.sqliteTable(
         sessionId: t.text("session_id").notNull(),
         createdAt: t.integer("created_at").notNull(),
         updatedAt: t.integer("updated_at").notNull(),
-        data: t
-            .text("data", { mode: "json" })
-            .notNull()
-            .$type<PartData>(),
+        data: t.text("data", { mode: "json" }).notNull().$type<PartData>(),
     },
     (table) => [
         t.index("parts_message_idx").on(table.messageId),
         t.index("parts_session_idx").on(table.sessionId),
+    ],
+);
+
+export const sessionFiles = t.sqliteTable(
+    "session_files",
+    {
+        id: t.text("id").primaryKey(),
+        sessionId: t
+            .text("session_id")
+            .notNull()
+            .references(() => sessions.id, { onDelete: "cascade" }),
+        originalName: t.text("original_name").notNull(),
+        storedName: t.text("stored_name").notNull(),
+        relativePath: t.text("relative_path").notNull(),
+        mimeType: t.text("mime_type").notNull(),
+        size: t.integer("size").notNull(),
+        createdAt: t.integer("created_at").notNull(),
+    },
+    (table) => [
+        t.index("session_files_session_idx").on(table.sessionId),
+        t.index("session_files_created_at_idx").on(table.createdAt),
     ],
 );
 
@@ -192,3 +216,6 @@ export type NewMessage = typeof messages.$inferInsert;
 
 export type Part = typeof parts.$inferSelect;
 export type NewPart = typeof parts.$inferInsert;
+
+export type SessionFile = typeof sessionFiles.$inferSelect;
+export type NewSessionFile = typeof sessionFiles.$inferInsert;

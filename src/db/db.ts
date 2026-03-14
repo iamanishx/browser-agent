@@ -10,12 +10,14 @@ import type {
     Part,
     PartData,
     Session,
+    SessionFile,
     SessionStatus,
 } from "./schema";
 
 export type SessionRecord = Session;
 export type MessageRecord = Message;
 export type PartRecord = Part;
+export type SessionFileRecord = SessionFile;
 
 export type CreateSessionInput = {
     id: string;
@@ -34,6 +36,17 @@ export type UpsertPartInput = {
     messageId: string;
     sessionId: string;
     data: PartData;
+};
+
+export type CreateSessionFileInput = {
+    id: string;
+    sessionId: string;
+    originalName: string;
+    storedName: string;
+    relativePath: string;
+    mimeType: string;
+    size: number;
+    createdAt?: number;
 };
 
 const DB_PATH = resolve(process.cwd(), "data", "agent.sqlite");
@@ -153,9 +166,7 @@ export async function listMessagesBySessionId(
     });
 }
 
-export async function upsertPart(
-    input: UpsertPartInput,
-): Promise<PartRecord> {
+export async function upsertPart(input: UpsertPartInput): Promise<PartRecord> {
     const ts = now();
 
     await db
@@ -176,9 +187,7 @@ export async function upsertPart(
     return (await getPartById(input.id))!;
 }
 
-export async function getPartById(
-    partId: string,
-): Promise<PartRecord | null> {
+export async function getPartById(partId: string): Promise<PartRecord | null> {
     const row = await db.query.parts.findFirst({
         where: eq(schema.parts.id, partId),
     });
@@ -203,9 +212,51 @@ export async function listPartsBySessionId(
     });
 }
 
+export async function createSessionFile(
+    input: CreateSessionFileInput,
+): Promise<SessionFileRecord> {
+    const createdAt = input.createdAt ?? now();
+
+    await db.insert(schema.sessionFiles).values({
+        id: input.id,
+        sessionId: input.sessionId,
+        originalName: input.originalName,
+        storedName: input.storedName,
+        relativePath: input.relativePath,
+        mimeType: input.mimeType,
+        size: input.size,
+        createdAt,
+    });
+
+    await touchSession(input.sessionId);
+    return (await getSessionFileById(input.id))!;
+}
+
+export async function getSessionFileById(
+    fileId: string,
+): Promise<SessionFileRecord | null> {
+    const row = await db.query.sessionFiles.findFirst({
+        where: eq(schema.sessionFiles.id, fileId),
+    });
+    return row ?? null;
+}
+
+export async function listSessionFilesBySessionId(
+    sessionId: string,
+): Promise<SessionFileRecord[]> {
+    return db.query.sessionFiles.findMany({
+        where: eq(schema.sessionFiles.sessionId, sessionId),
+        orderBy: [schema.sessionFiles.createdAt],
+    });
+}
+
 export async function getSessionWithMessages(
     sessionId: string,
-): Promise<{ session: SessionRecord; messages: MessageRecord[]; parts: PartRecord[] } | null> {
+): Promise<{
+    session: SessionRecord;
+    messages: MessageRecord[];
+    parts: PartRecord[];
+} | null> {
     const session = await getSessionById(sessionId);
     if (!session) return null;
 
